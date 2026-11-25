@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#03060c" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<title>Merry Christmas · 极光粒子圣诞树</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: #02050a;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: #eaf2ff; user-select: none; -webkit-user-select: none; overscroll-behavior: none;
+  }
+  #app { position: fixed; inset: 0; overflow: hidden;
+    background:
+      radial-gradient(ellipse 90% 62% at 50% 30%, #0d2338 0%, #081524 42%, #03060c 74%, #010308 100%);
+  }
+  /* 动态极光：左蓝紫、右青绿的垂直条纹 */
+  #aurora { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  #aurora .band { position: absolute; top: -18%; height: 112%; width: 58%;
+    filter: blur(9px); mix-blend-mode: screen;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 14%, #000 76%, transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0%, #000 14%, #000 76%, transparent 100%);
+  }
+  #aurora .b1 { left: 0;
+    background: repeating-linear-gradient(90deg,
+      rgba(139,92,246,.60) 0 14px, rgba(59,130,246,.20) 14px 30px, rgba(124,58,237,0) 30px 58px);
+    animation: sway1 14s ease-in-out infinite alternate;
+  }
+  #aurora .b2 { right: 0;
+    background: repeating-linear-gradient(90deg,
+      rgba(45,212,191,.58) 0 12px, rgba(56,189,248,.18) 12px 26px, rgba(45,212,191,0) 26px 52px);
+    animation: sway2 17s ease-in-out infinite alternate;
+  }
+  @keyframes sway1 {
+    from { transform: translateX(-3%) skewX(-4deg); opacity: .62; }
+    to   { transform: translateX(4%)  skewX(3deg);  opacity: .95; }
+  }
+  @keyframes sway2 {
+    from { transform: translateX(3%)  skewX(3deg);  opacity: .58; }
+    to   { transform: translateX(-4%) skewX(-3deg); opacity: .90; }
+  }
+  #scene { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  /* 暗角 */
+  #app::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 76% 70% at 50% 46%, transparent 46%, rgba(0,0,0,.55) 100%); }
+
+  #title { position: absolute; top: max(18px, env(safe-area-inset-top)); left: 0; right: 0;
+    text-align: center; font-size: 13px; letter-spacing: .34em; text-transform: uppercase;
+    color: rgba(255, 226, 168, .82); text-shadow: 0 0 18px rgba(253, 230, 138, .45);
+    pointer-events: none; z-index: 4; font-weight: 500;
+  }
+  #hint { position: absolute; bottom: max(22px, env(safe-area-inset-bottom)); left: 0; right: 0;
+    text-align: center; font-size: 12px; letter-spacing: .12em; color: rgba(210, 228, 255, .55);
+    pointer-events: none; z-index: 4; animation: hintFade 6s ease forwards;
+  }
+  @keyframes hintFade {
+    0% { opacity: 0; } 12% { opacity: 1; } 78% { opacity: 1; } 100% { opacity: 0; }
+  }
+  #fallback { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    text-align: center; font-size: 14px; line-height: 1.9; color: #cfd9ea; z-index: 5; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="aurora"><div class="band b1"></div><div class="band b2"></div></div>
+  <canvas id="scene"></canvas>
+  <div id="title">Merry Christmas</div>
+  <div id="hint">拖动屏幕 · 调整视角</div>
+  <div id="fallback">当前浏览器不支持 Canvas 渲染<br />请使用较新版本的 Safari / Chrome 打开</div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var canvas = document.getElementById('scene');
+  var ctx = canvas.getContext('2d', { alpha: true });
+  if (!ctx) { document.getElementById('fallback').style.display = 'flex'; return; }
+
+  var TAU = Math.PI * 2;
+  var TREE_BASE = -1.20, TREE_H = 2.40, R_MAX = 1.02;
+  var TOP_Y = TREE_BASE + TREE_H;
+  var CAM_DIST = 4.60;
+
+  /* ---------- 颜色 ---------- */
+  var C_ICE = [125, 211, 252];      // #7dd3fc 冰蓝
+  var C_PURPLE = [192, 132, 252];   // #c084fc 紫
+  var C_PINK = [240, 171, 252];     // #f0abfc 粉紫
+  var C_TOP = [204, 251, 241];      // #ccfbf1 青白
+  var C_GOLD = [253, 230, 138];     // #fde68a 暖金
+  var C_WHITE = [255, 250, 238];
+
+  function mix(a, b, t) {
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  }
+  // 按高度插值：底部冰蓝 → 中部紫 → 粉紫 → 顶部青白
+  function treeColor(s) {
+    s = s < 0 ? 0 : s > 1 ? 1 : s;
+    if (s < 0.42) return mix(C_ICE, C_PURPLE, s / 0.42);
+    if (s < 0.72) return mix(C_PURPLE, C_PINK, (s - 0.42) / 0.30);
+    return mix(C_PINK, C_TOP, (s - 0.72) / 0.28);
+  }
+
+  /* ---------- 发光贴图（离屏预渲染，杜绝外部素材） ---------- */
+  var SPRITE = 40;
+  function makeGlow(rgb) {
+    var c = document.createElement('canvas');
+    c.width = c.height = SPRITE;
+    var g = c.getContext('2d');
+    var h = SPRITE / 2;
+    var grd = g.createRadialGradient(h, h, 0, h, h, h);
+    var r = Math.round(rgb[0]), gg = Math.round(rgb[1]), b = Math.round(rgb[2]);
+    grd.addColorStop(0.00, 'rgba(' + r + ',' + gg + ',' + b + ',1)');
+    grd.addColorStop(0.22, 'rgba(' + r + ',' + gg + ',' + b + ',0.62)');
+    grd.addColorStop(0.55, 'rgba(' + r + ',' + gg + ',' + b + ',0.16)');
+    grd.addColorStop(1.00, 'rgba(' + r + ',' + gg + ',' + b + ',0)');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, SPRITE, SPRITE);
+    return c;
+  }
+
+  var PALETTE = [];       // 0-15：树体渐变；16：暖金；17：白
+  var sprites = [];
+  var i, k;
+  for (i = 0; i < 16; i++) PALETTE.push(treeColor(i / 15));
+  PALETTE.push(C_GOLD);
+  PALETTE.push(C_WHITE);
+  for (i = 0; i < PALETTE.length; i++) sprites.push(makeGlow(PALETTE[i]));
+
+  var IDX_GOLD = 16, IDX_WHITE = 17;
+
+  /* ---------- 场景数据 ---------- */
+  var tree = [], helix = [], ground = [], sky = [];
+  var W = 0, H = 0, DPR = 1, CX = 0, CY = 0, SCALE = 0, FOCAL = 0;
+
+  var yaw = 0.6, pitch = 0.10, fling = 0, autoSpin = 0.115;
+  var dragging = false, lastX = 0, lastY = 0, lastMoveX = 0, lastMoveT = 0;
+
+  function gauss() { return (Math.random() + Math.random() + Math.random() - 1.5) / 1.5; }
+
+  function buildTree(target) {
+    var arr = [];
+    var tiers = 12;
+    for (var j = 0; j < tiers; j++) {
+      var tBase = j / tiers;
+      var env = R_MAX * Math.pow(1 - tBase, 1.12);
+      var baseY = TREE_BASE + ((j + 0.55) / tiers) * TREE_H;
+      var branches = Math.max(5, Math.round(5 + 18 * env / R_MAX));
+      for (var b = 0; b < branches; b++) {
+        var ang0 = Math.random() * TAU;
+        var tipR = env * (0.72 + 0.28 * Math.random());
+        var rStart = env * (0.03 + 0.07 * Math.random());
+        var droop = (0.060 + 0.075 * Math.random()) * (0.4 + 0.6 * env / R_MAX);
+        var n = Math.max(4, Math.round(7 + 12 * env / R_MAX));
+        for (var q = 0; q < n; q++) {
+          var s = Math.pow(Math.random(), 0.85);
+          var r = rStart + (tipR - rStart) * s + gauss() * 0.012 + gauss() * 0.030 * s * s * s;
+          var y = baseY + 0.018 * Math.sin(Math.PI * s) - droop * Math.pow(s, 1.5)
+                + gauss() * (0.020 + 0.040 * s);
+          var ang = ang0 + gauss() * 0.030 + gauss() * 0.050 * s;
+          arr.push({
+            x: r * Math.cos(ang), y: y, z: r * Math.sin(ang),
+            size: 0.0092 + Math.random() * 0.0042,
+            bright: 0.72 + Math.random() * 0.33,
+            ph: Math.random() * TAU, fq: 1.1 + Math.random() * 2.2,
+            bucket: -1, white: false
+          });
+        }
+      }
+      // 层缘亮梢：让层叠轮廓更清晰
+      for (var f = 0; f < 10; f++) {
+        var fa = Math.random() * TAU;
+        var fr = env * (0.92 + 0.16 * Math.random());
+        var fy = baseY - (0.045 + 0.05 * Math.random()) + 0.012 * Math.sin(fa * 6 + tBase * 22);
+        arr.push({
+          x: fr * Math.cos(fa), y: fy, z: fr * Math.sin(fa),
+          size: 0.0105, bright: 0.78 + Math.random() * 0.28,
+          ph: Math.random() * TAU, fq: 1.4 + Math.random() * 2.0,
+          bucket: -1, white: Math.random() < 0.12
+        });
+      }
+    }
+    // 体积填充，补足密度（贴合圆锥外壳，向底部与外侧聚集）
+    while (arr.length < target) {
+      var vs = 1 - Math.sqrt(Math.random());
+      var envF = R_MAX * Math.pow(1 - vs, 1.12);
+      var rho = envF * Math.pow(Math.random(), 0.7) * 0.92;
+      var aa = Math.random() * TAU;
+      var yy = TREE_BASE + vs * TREE_H + gauss() * 0.012;
+      arr.push({
+        x: rho * Math.cos(aa), y: yy, z: rho * Math.sin(aa),
+        size: 0.0075 + Math.random() * 0.0035,
+        bright: 0.55 + Math.random() * 0.35,
+        ph: Math.random() * TAU, fq: 0.9 + Math.random() * 2.4,
+        bucket: -1, white: Math.random() < 0.05
+      });
+    }
+    // 颜色：按高度取样，白色闪烁粒子单独高亮
+    for (var m = 0; m < arr.length; m++) {
+      var p = arr[m];
+      var hs = (p.y - TREE_BASE) / TREE_H;
+      if (p.white || Math.random() < 0.04) {
+        p.bucket = IDX_WHITE;
+        p.white = true;
+        p.bright *= 1.15;
+        p.size *= 0.78;
+      } else {
+        p.bucket = Math.max(0, Math.min(15, Math.round(hs * 15 + (Math.random() - 0.5) * 1.6)));
+      }
+    }
+    return arr;
+  }
+
+  function buildHelix(count) {
+    var arr = [];
+    for (var m = 0; m < count; m++) {
+      var t = m / count;
+      var turns = 5.6;
+      var ang = t * TAU * turns;
+      var env = R_MAX * Math.pow(1 - t, 1.10);
+      var rad = env * 0.99 + 0.015;
+      var bead = 0.5 + 0.5 * Math.sin(t * TAU * 26);
+      arr.push({
+        x: rad * Math.cos(ang), y: TREE_BASE + t * TREE_H * 0.975, z: rad * Math.sin(ang),
+        size: 0.0062 + 0.0024 * bead,
+        bright: (0.82 + 0.52 * bead) * (0.85 + Math.random() * 0.30),
+        ph: Math.random() * TAU, fq: 1.6 + Math.random() * 1.8,
+        bucket: IDX_GOLD, white: false
+      });
+    }
+    return arr;
+  }
+
+  function buildGround(count) {
+    var arr = [];
+    for (var m = 0; m < count; m++) {
+      var rad = Math.sqrt(Math.random()) * 3.4;
+      var ang = Math.random() * TAU;
+      arr.push({
+        x: rad * Math.cos(ang), y: TREE_BASE - 0.02, z: rad * Math.sin(ang),
+        size: 0.006 + Math.random() * 0.008,
+        bright: (0.55 - rad * 0.10) * (0.6 + Math.random() * 0.5),
+        ph: Math.random() * TAU, fq: 0.6 + Math.random() * 1.8,
+        bucket: Math.random() < 0.25 ? 6 : 2, white: false
+      });
+    }
+    return arr;
+  }
+
+  function buildSky(count) {
+    var arr = [];
+    for (var m = 0; m < count; m++) {
+      arr.push({
+        x: Math.random() * W,
+        y: Math.random() * H * 0.78,
+        r: 0.5 + Math.random() * 1.1,
+        a: 0.18 + Math.random() * 0.55,
+        ph: Math.random() * TAU, fq: 0.5 + Math.random() * 1.6
+      });
+    }
+    return arr;
+  }
+
+  /* ---------- 尺寸 ---------- */
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+    SCALE = Math.min(H * 0.235, W * 0.44);       // 每世界单位的像素数
+    FOCAL = SCALE * CAM_DIST;
+    CX = W / 2;
+    CY = H * 0.555;
+
+    var small = Math.min(W, H) < 620;
+    var nTree = small ? 3600 : 7600;
+    var nHelix = small ? 540 : 920;
+    var nGround = small ? 460 : 860;
+
+    tree = buildTree(nTree);
+    helix = buildHelix(nHelix);
+    ground = buildGround(nGround);
+    sky = buildSky(small ? 110 : 190);
+  }
+
+  /* ---------- 投影 ---------- */
+  var cosY = 1, sinY = 0, cosP = 1, sinP = 0;
+
+  function project(x, y, z, out) {
+    var X = x * cosY - z * sinY;
+    var Z = x * sinY + z * cosY;
+    var Y = y * cosP - Z * sinP;
+    var Z2 = y * sinP + Z * cosP;
+    var depth = CAM_DIST + Z2;
+    if (depth < 0.25) return false;
+    var s = FOCAL / depth;
+    out.x = CX + X * s;
+    out.y = CY - Y * s;
+    out.s = s;
+    out.d = depth;
+    return true;
+  }
+
+  var pr = { x: 0, y: 0, s: 0, d: 0 };
+
+  /* ---------- 流星 ---------- */
+  var meteors = [];
+  var spawnTimer = 1.2;
+
+  function spawnMeteor() {
+    var fromLeft = Math.random() < 0.65;
+    var x = fromLeft ? -0.12 * W + Math.random() * W * 0.55 : W * 1.05 - Math.random() * W * 0.55;
+    var y = Math.random() * H * 0.36;
+    var speed = 520 + Math.random() * 380;
+    var ang = fromLeft ? 0.62 : Math.PI - 0.62;
+    meteors.push({
+      x: x, y: y,
+      vx: Math.cos(ang) * speed * (fromLeft ? 1 : 1),
+      vy: Math.sin(ang) * speed,
+      len: 120 + Math.random() * 120,
+      life: 0, ttl: 0.9 + Math.random() * 0.7
+    });
+  }
+
+  function updateMeteors(dt) {
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnMeteor();
+      spawnTimer = 2.4 + Math.random() * 3.2;
+    }
+    for (var m = meteors.length - 1; m >= 0; m--) {
+      var mm = meteors[m];
+      mm.life += dt;
+      mm.x += mm.vx * dt;
+      mm.y += mm.vy * dt;
+      if (mm.life > mm.ttl || mm.x < -300 || mm.x > W + 300 || mm.y > H + 300) meteors.splice(m, 1);
+    }
+  }
+
+  function drawMeteors() {
+    for (var m = 0; m < meteors.length; m++) {
+      var mm = meteors[m];
+      var k = mm.life / mm.ttl;
+      var fade = Math.sin(Math.PI * Math.min(1, k)) * 0.9;
+      var sp = Math.hypot(mm.vx, mm.vy) || 1;
+      var tx = mm.x - mm.vx / sp * mm.len;
+      var ty = mm.y - mm.vy / sp * mm.len;
+      var grd = ctx.createLinearGradient(mm.x, mm.y, tx, ty);
+      grd.addColorStop(0, 'rgba(255,255,255,' + (0.95 * fade).toFixed(3) + ')');
+      grd.addColorStop(0.35, 'rgba(198,235,255,' + (0.42 * fade).toFixed(3) + ')');
+      grd.addColorStop(1, 'rgba(198,235,255,0)');
+      ctx.strokeStyle = grd;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(mm.x, mm.y);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+    }
+  }
+
+  /* ---------- 树顶星 ---------- */
+  function starPath(cx, cy, R, inner) {
+    ctx.beginPath();
+    for (var m = 0; m < 10; m++) {
+      var rad = (m % 2 === 0) ? R : R * inner;
+      var a = -Math.PI / 2 + m * Math.PI / 5;
+      var px = cx + Math.cos(a) * rad;
+      var py = cy + Math.sin(a) * rad;
+      if (m === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
+
+  function drawStar(t) {
+    if (!project(0, TOP_Y + 0.17, 0, pr)) return;
+    var pulse = 0.9 + 0.1 * Math.sin(t * 2.1);
+    var R = 0.175 * pr.s * pulse;
+    if (R < 1) return;
+
+    // 外层光晕
+    var halo = ctx.createRadialGradient(pr.x, pr.y, 0, pr.x, pr.y, R * 3.9);
+    halo.addColorStop(0, 'rgba(255,240,196,0.62)');
+    halo.addColorStop(0.30, 'rgba(253,220,120,0.26)');
+    halo.addColorStop(0.66, 'rgba(245,178,40,0.09)');
+    halo.addColorStop(1, 'rgba(245,178,40,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(pr.x, pr.y, R * 3.9, 0, TAU);
+    ctx.fill();
+
+    // 星形本体
+    var body = ctx.createLinearGradient(pr.x, pr.y - R, pr.x, pr.y + R);
+    body.addColorStop(0, 'rgba(255,248,214,0.98)');
+    body.addColorStop(0.55, 'rgba(253,224,120,0.96)');
+    body.addColorStop(1, 'rgba(238,178,38,0.90)');
+    ctx.fillStyle = body;
+    starPath(pr.x, pr.y, R, 0.42);
+    ctx.fill();
+
+    // 核心高光
+    var core = ctx.createRadialGradient(pr.x, pr.y, 0, pr.x, pr.y, R * 0.62);
+    core.addColorStop(0, 'rgba(255,255,255,0.85)');
+    core.addColorStop(0.5, 'rgba(255,244,200,0.25)');
+    core.addColorStop(1, 'rgba(255,244,200,0)');
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(pr.x, pr.y, R * 0.62, 0, TAU);
+    ctx.fill();
+  }
+
+  /* ---------- 绘制粒子 ---------- */
+  function drawParticles(arr, t) {
+    for (var m = 0; m < arr.length; m++) {
+      var p = arr[m];
+      if (!project(p.x, p.y, p.z, pr)) continue;
+      var osc = 0.5 + 0.5 * Math.sin(t * p.fq + p.ph);
+      var a = p.bright * (0.62 + 0.38 * osc);
+      if (p.white) a = p.bright * (0.20 + 0.78 * Math.pow(osc, 5));
+      a *= 1.32 / (0.85 + pr.d * 0.12);
+      if (a <= 0.015) continue;
+      var R = p.size * pr.s * 3.4;
+      if (R < 0.35) R = 0.35;
+      ctx.globalAlpha = a > 1 ? 1 : a;
+      ctx.drawImage(sprites[p.bucket], pr.x - R, pr.y - R, R * 2, R * 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawSky(t) {
+    for (var m = 0; m < sky.length; m++) {
+      var s = sky[m];
+      var tw = 0.55 + 0.45 * Math.sin(t * s.fq + s.ph);
+      ctx.globalAlpha = s.a * tw;
+      ctx.fillStyle = '#dbeafe';
+      ctx.fillRect(s.x, s.y, s.r, s.r);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawBaseGlow() {
+    if (!project(0, TREE_BASE - 0.02, 0, pr)) return;
+    var R = 0.98 * pr.s;
+    var g = ctx.createRadialGradient(pr.x, pr.y, 0, pr.x, pr.y, R);
+    g.addColorStop(0, 'rgba(103,232,249,0.11)');
+    g.addColorStop(0.5, 'rgba(99,102,241,0.05)');
+    g.addColorStop(1, 'rgba(99,102,241,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(pr.x, pr.y, R, R * 0.24, 0, 0, TAU);
+    ctx.fill();
+  }
+
+  /* ---------- 主循环 ---------- */
+  var prev = performance.now();
+  var timeAcc = 0;
+
+  function frame(now) {
+    var dt = (now - prev) / 1000;
+    prev = now;
+    if (dt > 0.08) dt = 0.08;
+    timeAcc += dt;
+    var t = timeAcc;
+
+    // 自动旋转 + 拖动惯性
+    if (!dragging) {
+      yaw += (autoSpin + fling) * dt;
+      fling *= Math.exp(-3.0 * dt);
+    }
+
+    cosY = Math.cos(yaw); sinY = Math.sin(yaw);
+    cosP = Math.cos(pitch); sinP = Math.sin(pitch);
+
+    updateMeteors(dt);
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'lighter';
+
+    drawSky(t);
+    drawMeteors();
+    drawBaseGlow();
+    drawParticles(ground, t);
+    drawParticles(tree, t);
+    drawParticles(helix, t);
+    drawStar(t);
+
+    ctx.globalCompositeOperation = 'source-over';
+    requestAnimationFrame(frame);
+  }
+
+  /* ---------- 交互 ---------- */
+  canvas.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    lastMoveX = 0; lastMoveT = performance.now();
+    fling = 0;
+    if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+  }, { passive: true });
+
+  canvas.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    var dx = e.clientX - lastX;
+    var dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    yaw += dx * 0.0062;
+    pitch = Math.max(-0.22, Math.min(0.50, pitch + dy * 0.0032));
+    var now = performance.now();
+    var span = Math.max(8, now - lastMoveT);
+    lastMoveX = dx;
+    lastMoveT = now;
+  }, { passive: true });
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    fling = lastMoveX * 0.06;   // 松手惯性
+  }
+  canvas.addEventListener('pointerup', endDrag, { passive: true });
+  canvas.addEventListener('pointercancel', endDrag, { passive: true });
+  canvas.addEventListener('pointerleave', endDrag, { passive: true });
+
+  // 阻止双击缩放 / 长按菜单
+  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+
+  var resizeTimer = 0;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () {
+      resize();
+      ctx.globalCompositeOperation = 'lighter';
+    }, 120);
+  });
+
+  resize();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
